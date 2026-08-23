@@ -1,0 +1,347 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  PLAYER
+  ADMIN
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum GameStatus {
+  WAITING
+  TEAM_FORMING
+  READY
+  RUNNING
+  SUBMISSION
+  EVALUATING
+  COMPLETED
+  CANCELLED
+}
+
+enum TeamSide {
+  TEAM_A
+  TEAM_B
+}
+
+enum GameMode {
+  BATTLE          // original 4-player (2v2) build-from-scratch mode
+  BUG_FIX         // 2-player (1v1) duel: fix intentional bugs in AI-provided starter code
+  PRACTICE        // solo, no opponent — user starts anytime, AI gives a timed project
+  FRIEND_CHALLENGE // 2-player (1v1), invite-code based instead of matchmaking queue
+}
+
+enum CoinTransactionType {
+  GAME_WIN
+  GAME_LOSS
+  BONUS
+  ADMIN_ADJUSTMENT
+}
+
+enum BadgeCode {
+  FIRST_WIN
+  FIVE_WINS
+  WIN_STREAK
+  SPEED_CODER
+  AI_MASTER
+  TEAM_PLAYER
+  HACKATHON_CHAMPION
+}
+
+// ---------------------------------------------------------------------------
+// Identity / profile
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String   @id @default(uuid())
+  name              String
+  email             String   @unique
+  passwordHash      String
+  role              Role     @default(PLAYER)
+
+  rating            Int      @default(1000)
+  coins             Int      @default(0)
+  xp                Int      @default(0)
+  wins              Int      @default(0)
+  losses            Int      @default(0)
+  currentWinStreak  Int      @default(0)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  profile           Profile?
+  skills            UserSkill[]
+  teamMemberships   TeamMember[]
+  submissions       Submission[]
+  ratingHistory     RatingHistory[]
+  coinTransactions  CoinTransaction[]
+  badges            UserBadge[]
+  messages          Message[]
+  refreshTokens     RefreshToken[]
+
+  @@index([email])
+  @@index([rating])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Profile {
+  id                     String          @id @default(uuid())
+  userId                 String          @unique
+  user                   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  bio                    String?
+  avatar                 String?
+  experienceLevel        ExperienceLevel @default(BEGINNER)
+  githubUrl              String?
+  linkedinUrl            String?
+  preferredTechnologies  String[]        @default([])
+  interests              String[]        @default([])
+
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Skills
+// ---------------------------------------------------------------------------
+
+model Skill {
+  id        String      @id @default(uuid())
+  name      String      @unique
+  category  String?
+  createdAt DateTime    @default(now())
+
+  userSkills UserSkill[]
+}
+
+model UserSkill {
+  id            String          @id @default(uuid())
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillId       String
+  skill         Skill           @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  proficiency   ExperienceLevel @default(BEGINNER)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([userId, skillId])
+  @@index([userId])
+  @@index([skillId])
+}
+
+// ---------------------------------------------------------------------------
+// Games / teams
+// ---------------------------------------------------------------------------
+
+model Game {
+  id            String     @id @default(uuid())
+  status        GameStatus @default(WAITING)
+  mode          GameMode   @default(BATTLE)
+  startTime     DateTime?
+  endTime       DateTime?
+  challengeId   String?
+  challenge     Challenge? @relation(fields: [challengeId], references: [id])
+  winnerTeamId  String?    @unique
+  winnerTeam    Team?      @relation("WinnerTeam", fields: [winnerTeamId], references: [id])
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  teams         Team[]     @relation("GameTeams")
+  submissions   Submission[]
+  messages      Message[]
+
+  @@index([status])
+  @@index([startTime])
+  @@index([mode])
+}
+
+model Team {
+  id        String     @id @default(uuid())
+  gameId    String
+  game      Game       @relation("GameTeams", fields: [gameId], references: [id], onDelete: Cascade)
+  side      TeamSide
+  totalScore Float?
+
+  createdAt DateTime   @default(now())
+
+  members       TeamMember[]
+  submissions   Submission[]
+  evaluations   Evaluation[]
+  wonGame       Game?        @relation("WinnerTeam")
+
+  @@unique([gameId, side])
+  @@index([gameId])
+}
+
+model TeamMember {
+  id        String   @id @default(uuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isReady   Boolean  @default(false)
+  joinedAt  DateTime @default(now())
+
+  @@unique([teamId, userId])
+  @@index([teamId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Challenges
+// ---------------------------------------------------------------------------
+
+model Challenge {
+  id                  String   @id @default(uuid())
+  title               String
+  description         String
+  difficulty          ExperienceLevel
+  requirements        String[]
+  bonusRequirements   String[]
+  evaluationCriteria  Json
+  generatedFor        String[] // skill names used to request generation
+  mode                GameMode @default(BATTLE)
+  starterCode         String?  // BUG_FIX mode: the intentionally-buggy code teams must fix
+  createdAt           DateTime @default(now())
+
+  games Game[]
+}
+
+// ---------------------------------------------------------------------------
+// Submissions / evaluation
+// ---------------------------------------------------------------------------
+
+model Submission {
+  id           String   @id @default(uuid())
+  gameId       String
+  game         Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  teamId       String
+  team         Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  submittedBy  String
+  submitter    User     @relation(fields: [submittedBy], references: [id])
+
+  githubUrl    String
+  demoUrl      String?
+  description  String
+
+  createdAt    DateTime @default(now())
+
+  evaluation   Evaluation?
+
+  @@unique([teamId]) // one final submission per team
+  @@index([gameId])
+}
+
+model Evaluation {
+  id                String     @id @default(uuid())
+  submissionId      String     @unique
+  submission        Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  teamId            String
+  team              Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  automatedResults  Json
+  automatedScore    Float
+  aiResults         Json
+  aiScore           Float
+  finalScore        Float
+
+  createdAt         DateTime   @default(now())
+
+  @@index([teamId])
+}
+
+// ---------------------------------------------------------------------------
+// Rewards / progression
+// ---------------------------------------------------------------------------
+
+model RatingHistory {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameId     String?
+  before     Int
+  after      Int
+  delta      Int
+  reason     String
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+}
+
+model CoinTransaction {
+  id          String              @id @default(uuid())
+  userId      String
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Int
+  type        CoinTransactionType
+  gameId      String?
+  description String?
+  createdAt   DateTime            @default(now())
+
+  @@index([userId])
+}
+
+model Badge {
+  id          String      @id @default(uuid())
+  code        BadgeCode   @unique
+  name        String
+  description String
+  createdAt   DateTime    @default(now())
+
+  userBadges  UserBadge[]
+}
+
+model UserBadge {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId    String
+  badge      Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  awardedAt  DateTime @default(now())
+
+  @@unique([userId, badgeId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+model Message {
+  id        String   @id @default(uuid())
+  gameId    String
+  game      Game     @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([gameId])
+}
