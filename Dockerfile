@@ -10,4 +10,4 @@ COPY . .
 
 RUN bunx prisma generate
 
-CMD ["bun", "run", "start"]
+CMD ["sh", "-c", "bunx prisma migrate deploy && bun run start"]
